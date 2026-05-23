@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Flappy Bird Sederhana</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: linear-gradient(145deg, #0b2b3f 0%, #1a4a6f 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', 'VT323', monospace;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 20px;
+            border-radius: 36px;
+            background: rgba(0, 0, 0, 0.2);
+            box-shadow: 0 20px 35px rgba(0, 0, 0, 0.4);
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 28px;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+            cursor: pointer;
+            background-color: #4c9fcf;
+        }
+
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            width: 100%;
+            gap: 28px;
+            background: #1f2e3aee;
+            backdrop-filter: blur(6px);
+            padding: 10px 28px;
+            border-radius: 60px;
+            color: #f9f3c1;
+            text-shadow: 2px 2px 0 #1e3b44;
+            font-weight: bold;
+        }
+
+        .score-box, .best-box {
+            background: #00000066;
+            padding: 6px 20px;
+            border-radius: 32px;
+            font-size: 1.8rem;
+            letter-spacing: 2px;
+        }
+
+        .score-box span, .best-box span {
+            font-size: 1rem;
+            font-weight: normal;
+            margin-right: 8px;
+            color: #ffe6a3;
+        }
+
+        button {
+            background: #f5bc70;
+            border: none;
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 1.2rem;
+            padding: 8px 28px;
+            border-radius: 3rem;
+            color: #2c2b2b;
+            cursor: pointer;
+            transition: 0.1s linear;
+            box-shadow: 0 5px 0 #a05e1a;
+            letter-spacing: 1px;
+        }
+
+        button:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px 0 #a05e1a;
+        }
+
+        .instruction {
+            background: #000000aa;
+            border-radius: 40px;
+            padding: 6px 20px;
+            font-size: 0.9rem;
+            color: #cfebff;
+            font-weight: bold;
+        }
+
+        @media (max-width: 520px) {
+            .score-box, .best-box { padding: 4px 14px; font-size: 1.4rem; }
+            .info-panel { gap: 12px; padding: 8px 18px; }
+            button { font-size: 1rem; padding: 6px 22px; }
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="game-container">
+        <canvas id="flappyCanvas" width="400" height="600"></canvas>
+        <div class="info-panel">
+            <div class="score-box"><span>🐤 SKOR</span> <span id="scoreValue">0</span></div>
+            <div class="best-box"><span>🏆 TERBAIK</span> <span id="bestValue">0</span></div>
+        </div>
+        <button id="restartButton">🔄 TERBANG LAGI</button>
+        <div class="instruction">💡 Klik / Spasi / Tap layar untuk terbang | Hindari pipa!</div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        // --- CANVAS & KONTEKS ---
+        const canvas = document.getElementById('flappyCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- UKURAN GAME ---
+        const W = 400, H = 600;
+        
+        // --- PARAMETER BURUNG ---
+        const BIRD_RADIUS = 12;
+        let bird = {
+            x: 70,
+            y: H/2,
+            vy: 0,
+            radius: BIRD_RADIUS
+        };
+        
+        // --- PARAMETER FISIKA ---
+        const GRAVITY = 0.2;
+        const JUMP_POWER = -4.8;
+        const MAX_VY = 8;
+        
+        // --- PARAMETER PIPA ---
+        const PIPE_WIDTH = 52;
+        const PIPE_GAP = 130;        // celah antar pipa
+        const PIPE_SPACING = 210;     // jarak antar pasangan pipa (horizontal)
+        let pipes = [];
+        
+        // --- SKOR & STATUS ---
+        let score = 0;
+        let bestScore = 0;
+        let gameActive = true;
+        let frameRequest;
+        let lastTimestamp = 0;
+        
+        // --- Efek tambahan (animasi ground / awan) tidak perlu rumit, tapi kita buat sederhana
+        let groundOffset = 0;
+        
+        // --- Load best score dari localStorage ---
+        try {
+            const saved = localStorage.getItem('flappyBestScore');
+            if(saved !== null && !isNaN(parseInt(saved))) {
+                bestScore = parseInt(saved);
+                document.getElementById('bestValue').innerText = bestScore;
+            }
+        } catch(e) { /* silent fail */ }
+        
+        // --- Helper update UI skor ---
+        function updateScoreUI() {
+            document.getElementById('scoreValue').innerText = score;
+            if(score > bestScore) {
+                bestScore = score;
+                document.getElementById('bestValue').innerText = bestScore;
+                // simpan best
+                try {
+                    localStorage.setItem('flappyBestScore', bestScore);
+                } catch(e) {}
+            }
+        }
+        
+        // --- RESET GAME (start ulang) ---
+        function resetGame() {
+            gameActive = true;
+            score = 0;
+            updateScoreUI();
+            
+            // reset burung
+            bird.y = H/2;
+            bird.vy = 0;
+            bird.x = 70;
+            
+            // reset pipa
+            pipes = [];
+            // buat 3-4 pipa awal
+            let startX = W + 80;
+            for(let i = 0; i < 4; i++) {
+                let pipeY = Math.random() * (H - PIPE_GAP - 70) + 35;
+                pipes.push({
+                    x: startX + i * PIPE_SPACING,
+                    topHeight: pipeY,
+                    bottomY: pipeY + PIPE_GAP,
+                    counted: false
+                });
+            }
+        }
+        
+        // --- TABRAKAN: deteksi collision antara burung dan pipa / batas atas bawah ---
+        function checkCollision() {
+            // batas atas / bawah (tanah & langit)
+            if(bird.y - BIRD_RADIUS <= 0) {
+                return true;
+            }
+            if(bird.y + BIRD_RADIUS >= H) {
+                return true;
+            }
+            
+            // cek pipa
+            for(let i = 0; i < pipes.length; i++) {
+                const p = pipes[i];
+                // apakah burung sejajar secara horizontal dengan pipa?
+                if(bird.x + BIRD_RADIUS > p.x && bird.x - BIRD_RADIUS < p.x + PIPE_WIDTH) {
+                    // tabrakan dengan pipa atas atau bawah
+                    if(bird.y - BIRD_RADIUS < p.topHeight) {
+                        return true;
+                    }
+                    if(bird.y + BIRD_RADIUS > p.bottomY) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        
+        // --- UPDATE SKOR (ketika burung melewati pipa) ---
+        function updateScore() {
+            for(let i = 0; i < pipes.length; i++) {
+                const p = pipes[i];
+                if(!p.counted && p.x + PIPE_WIDTH < bird.x) {
+                    p.counted = true;
+                    score++;
+                    updateScoreUI();
+                }
+            }
+        }
+        
+        // --- UPDATE FISIKA DAN PERGERAKAN (dipanggil tiap frame) ---
+        function updateGame() {
+            if(!gameActive) return;
+            
+            // 1. Gerak burung
+            bird.vy += GRAVITY;
+            if(bird.vy > MAX_VY) bird.vy = MAX_VY;
+            bird.y += bird.vy;
+            
+            // 2. Geser pipa ke kiri
+            for(let i = 0; i < pipes.length; i++) {
+                pipes[i].x -= 2.2;   // kecepatan gerak horizontal
+            }
+            
+            // 3. Hapus pipa yang sudah lewat layar (di luar kiri)
+            pipes = pipes.filter(p => p.x + PIPE_WIDTH > 0);
+            
+            // 4. Tambah pipa baru jika perlu (pipa terakhir di ujung kanan)
+            if(pipes.length === 0) {
+                let lastX = W;
+                let newY = Math.random() * (H - PIPE_GAP - 70) + 35;
+                pipes.push({
+                    x: lastX + 100,
+                    topHeight: newY,
+                    bottomY: newY + PIPE_GAP,
+                    counted: false
+                });
+            } else {
+                let lastPipe = pipes[pipes.length-1];
+                if(lastPipe.x + PIPE_WIDTH <= W - 40) {  // cukup ruang untuk menambah
+                    let newY = Math.random() * (H - PIPE_GAP - 70) + 35;
+                    pipes.push({
+                        x: lastPipe.x + PIPE_SPACING,
+                        topHeight: newY,
+                        bottomY: newY + PIPE_GAP,
+                        counted: false
+                    });
+                }
+            }
+            
+            // 5. Update skor berdasarkan pipa yang terlewati
+            updateScore();
+            
+            // 6. Cek tabrakan setelah semua update
+            if(checkCollision()) {
+                gameActive = false;
+                return;
+            }
+        }
+        
+        // --- FUNGSI MENGGAMBAR SEMUA ELEMEN (Visual retro) ---
+        function drawBackground() {
+            // gradien langit
+            const gradSky = ctx.createLinearGradient(0, 0, 0, H);
+            gradSky.addColorStop(0, "#72c8e8");
+            gradSky.addColorStop(0.7, "#3f9bcb");
+            ctx.fillStyle = gradSky;
+            ctx.fillRect(0, 0, W, H);
+            
+            // awan sederhana
+            ctx.fillStyle = "#ffffffcc";
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.ellipse(60, 80, 35, 30, 0, 0, Math.PI*2);
+            ctx.ellipse(100, 70, 40, 32, 0, 0, Math.PI*2);
+            ctx.ellipse(140, 85, 30, 28, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(300, 140, 40, 32, 0, 0, Math.PI*2);
+            ctx.ellipse(345, 125, 35, 28, 0, 0, Math.PI*2);
+            ctx.ellipse(265, 130, 30, 25, 0, 0, Math.PI*2);
+            ctx.fill();
+        }
+        
+        function drawGround() {
+            // rumput / tanah bergerak
+            groundOffset = (groundOffset + 1.2) % 40;
+            ctx.fillStyle = "#8b5a2b";
+            ctx.fillRect(0, H-18, W, 18);
+            ctx.fillStyle = "#6d431f";
+            for(let i=0; i<12; i++) {
+                ctx.fillRect((i*35 + groundOffset) % W, H-20, 18, 6);
+            }
+            ctx.fillStyle = "#a77b2e";
+            ctx.fillRect(0, H-22, W, 4);
+            // garis bayangan
+            ctx.fillStyle = "#3e2a1c";
+            ctx.fillRect(0, H-15, W, 2);
+        }
+        
+        function drawPipes() {
+            for(let p of pipes) {
+                // Pipa Atas
+                ctx.fillStyle = "#2f6b2f";
+                ctx.shadowBlur = 2;
+                ctx.shadowColor = "black";
+                ctx.fillRect(p.x, 0, PIPE_WIDTH, p.topHeight);
+                ctx.fillStyle = "#1d471d";
+                ctx.fillRect(p.x-5, p.topHeight-40, PIPE_WIDTH+10, 40);
+                ctx.fillStyle = "#84b56a";
+                ctx.fillRect(p.x-3, p.topHeight-36, PIPE_WIDTH+6, 32);
+                // detail pipa atas
+                ctx.fillStyle = "#4a7a2c";
+                ctx.fillRect(p.x+5, p.topHeight-18, PIPE_WIDTH-10, 14);
+                
+                // Pipa Bawah
+                ctx.fillStyle = "#2f6b2f";
+                ctx.fillRect(p.x, p.bottomY, PIPE_WIDTH, H - p.bottomY);
+                ctx.fillStyle = "#1d471d";
+                ctx.fillRect(p.x-5, p.bottomY, PIPE_WIDTH+10, 40);
+                ctx.fillStyle = "#84b56a";
+                ctx.fillRect(p.x-3, p.bottomY+4, PIPE_WIDTH+6, 32);
+                ctx.fillStyle = "#4a7a2c";
+                ctx.fillRect(p.x+5, p.bottomY+18, PIPE_WIDTH-10, 14);
+            }
+            ctx.shadowBlur = 0;
+        }
+        
+        function drawBird() {
+            // animasi kepakan sayap kecil berdasarkan frame dan vy
+            const wingAngle = Math.sin(Date.now() * 0.012) * 0.8;
+            ctx.save();
+            ctx.translate(bird.x, bird.y);
+            // rotasi sedikit sesuai kecepatan vertikal
+            let rot = Math.min(Math.max(bird.vy * 0.12, -0.6), 0.9);
+            ctx.rotate(rot);
+            // badan burung
+            ctx.beginPath();
+            ctx.ellipse(0, 0, BIRD_RADIUS, BIRD_RADIUS*0.9, 0, 0, Math.PI*2);
+            ctx.fillStyle = "#f4c542";
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(-3, -3, 3.5, 3, 0, 0, Math.PI*2);
+            ctx.fillStyle = "#000000";
+            ctx.fill();
+            ctx.fillStyle = "#ffffff";
+            ctx.beginPath();
+            ctx.arc(-4, -4, 1.2, 0, Math.PI*2);
+            ctx.fill();
+            // paruh
+            ctx.beginPath();
+            ctx.moveTo(8, -2);
+            ctx.lineTo(13, 0);
+            ctx.lineTo(8, 2);
+            ctx.fillStyle = "#dd6b20";
+            ctx.fill();
+            // sayap
+            ctx.beginPath();
+            ctx.moveTo(-5, -2);
+            ctx.quadraticCurveTo(-2 + wingAngle*4, -10, 2, -4);
+            ctx.fillStyle = "#e09d32";
+            ctx.fill();
+            // jambul
+            ctx.beginPath();
+            ctx.moveTo(-2, -10);
+            ctx.lineTo(1, -13);
+            ctx.lineTo(5, -9);
+            ctx.fillStyle = "#f0b27a";
+            ctx.fill();
+            ctx.restore();
+        }
+        
+        function drawScoreOnGameOver() {
+            if(!gameActive) {
+                ctx.font = "bold 28monospace";
+                ctx.fillStyle = "#d4242ccc";
+                ctx.shadowBlur = 0;
+                ctx.fillText("💀 GAME OVER", W/2-105, H/2-55);
+                ctx.font = "18px 'Courier New'";
+                ctx.fillStyle = "#fff6cf";
+                ctx.fillText("Klik 'TERBANG LAGI'", W/2-105, H/2+15);
+                ctx.fillStyle = "#ffd966";
+                ctx.font = "bold 20px monospace";
+                ctx.fillText("SKOR: "+score, W/2-48, H/2+65);
+            }
+        }
+        
+        // --- MAIN RENDER LOOP ---
+        function render() {
+            // gambar semua latar
+            drawBackground();
+            drawPipes();
+            drawGround();
+            drawBird();
+            drawScoreOnGameOver();
+            
+            // tambahan pesan saat game aktif (tips)
+            if(gameActive) {
+                ctx.font = "bold 14px monospace";
+                ctx.fillStyle = "#fafad2";
+                ctx.shadowBlur = 0;
+                ctx.fillText("⬆️ klik / spasi", 15, 40);
+            }
+        }
+        
+        // --- GAME LOOP (update & render) ---
+        function gameLoop() {
+            updateGame();   // hanya jalan jika gameActive true, di dalam cek kondisi
+            render();
+            frameRequest = requestAnimationFrame(gameLoop);
+        }
+        
+        // --- EVENT LONCATAN (keyboard, klik canvas, tombol sentuh) ---
+        function jump() {
+            if(!gameActive) return;  // jika game over, tidak bisa loncat, harus restart pake tombol
+            bird.vy = JUMP_POWER;
+            // efek suara halus (opsional, tanpa web audio biar simpel)
+            // getarkan sedikit sentuhan? tidak perlu, cukup visual
+            // kita bisa membuat efek kecil getaran pada canvas (opsional)
+            canvas.style.transform = "scale(0.99)";
+            setTimeout(() => { canvas.style.transform = ""; }, 70);
+        }
+        
+        // Handler untuk event (klik, tap, spasi, sentuh)
+        function handleJump(e) {
+            // mencegah scroll saat spasi
+            if(e.type === 'keydown') {
+                if(e.code === 'Space' || e.code === 'ArrowUp') {
+                    e.preventDefault();
+                    jump();
+                }
+                // optional: jika game over dan tekan spasi bisa restart? tidak, biar pakai tombol khusus
+                return;
+            }
+            // klik / tap pada canvas
+            jump();
+        }
+        
+        // --- RESTART handler ---
+        function restartGame() {
+            resetGame();
+            // jika sebelumnya game over, hidupkan lagi
+            gameActive = true;
+            // memastikan posisi tidak collision saat restart langsung
+            // resetGame sudah menginisialisasi ulang bird & pipa aman
+        }
+        
+        // --- INIT & REGISTER EVENT ---
+        function init() {
+            resetGame();
+            gameActive = true;
+            
+            // Event untuk melompat
+            canvas.addEventListener('click', handleJump);
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                handleJump(e);
+            });
+            window.addEventListener('keydown', handleJump);
+            
+            // Tombol restart
+            const restartBtn = document.getElementById('restartButton');
+            restartBtn.addEventListener('click', () => {
+                restartGame();
+            });
+            restartBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                restartGame();
+            });
+            
+            // memulai loop game
+            gameLoop();
+        }
+        
+        init();
+    })();
+</script>
+</body>
+</html>
